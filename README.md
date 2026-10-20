@@ -14,9 +14,8 @@ Este projeto apresenta um dashboard interativo desenvolvido com Python, Pandas, 
 - Distribuição da densidade dos preços.
 - Regressão linear entre preço e nota.
 
-## Tecnologias utilizadas
+## Bibliotecas utilizadas
 
-- Python
 - Pandas
 - Plotly
 - Dash
