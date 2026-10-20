@@ -25,7 +25,7 @@ Este projeto apresenta um dashboard interativo desenvolvido com Python, Pandas, 
 
 1. Instale as dependências com `pip install -r requirements.txt`.
 2. Coloque o arquivo `ecommerce_estatistica.csv` na mesma pasta de `app.py`.
-3. Execute `python app.py`.
+3. Execute `python Graficos.py`.
 4. Abra `http://127.0.0.1:8050/` no navegador.
 
 ## Objetivo
