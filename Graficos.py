@@ -1,17 +1,19 @@
-
-# Importa as bibliotecas necessárias
+from pathlib import Path
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from dash import Dash, html, dcc
+from dash import Dash, html, dcc, Input, Output
 
-# Lê o arquivo CSV e remove o índice antigo, caso exista
+
+# LEITURA E PREPARAÇÃO DOS DADOS
+
 df = pd.read_csv("ecommerce_estatistica.csv")
 
-if "Unnamed: 0" in df.columns:
-    df = df.drop(columns="Unnamed: 0")
+# Remover coluna de índice, caso exista
+df = df.loc[:, ~df.columns.str.contains("^Unnamed")]
 
-# Define as colunas numéricas que serão utilizadas
+# Converter colunas numéricas
 colunas_numericas = [
     "Nota",
     "N_Avaliações",
@@ -20,297 +22,384 @@ colunas_numericas = [
     "Qtd_Vendidos_Cod"
 ]
 
-# Converte as colunas para números quando elas existirem
 for coluna in colunas_numericas:
     if coluna in df.columns:
-        df[coluna] = pd.to_numeric(df[coluna], errors="coerce")
+        df[coluna] = pd.to_numeric(
+            df[coluna].astype(str)
+            .str.replace(",", ".", regex=False),
+            errors="coerce"
+        )
 
-# Cria o aplicativo Dash
-app = Dash(__name__)
+# Verificar as colunas necessárias
+colunas_obrigatorias = [
+    "Nota",
+    "N_Avaliações",
+    "Preço",
+    "Gênero",
+    "Material"
+]
 
-# Define o título que aparece na aba do navegador
-app.title = "Dashboard de E-commerce"
+colunas_faltando = [
+    coluna for coluna in colunas_obrigatorias
+    if coluna not in df.columns
+]
+
+if colunas_faltando:
+    raise ValueError(
+        "Colunas não encontradas no CSV: "
+        + ", ".join(colunas_faltando)
+    )
+
+# Cópia para os gráficos
+df = df.copy()
+
+# Remover linhas sem preço para gráficos de preço
+df_preco = df.dropna(subset=["Preço"]).copy()
+
+# Dados para dispersão e regressão
+df_analise = df.dropna(
+    subset=["Preço", "Nota", "N_Avaliações"]
+).copy()
+
+# Escala logarítmica exige valores positivos
+df_log = df_analise[
+    df_analise["N_Avaliações"] > 0
+].copy()
+
+# Tema visual dos gráficos
+tema = "plotly_white"
 
 
-# 1. Histograma: distribuição dos preços
-fig_histograma = px.histogram(
-    df.dropna(subset=["Preço"]),
+# CRIAR OS GRÁFICOS
+
+
+# Gráfico 1: Histograma dos preços
+fig_hist = px.histogram(
+    df_preco,
     x="Preço",
     nbins=30,
-    title="Distribuição dos Preços dos Produtos",
-    labels={
-        "Preço": "Preço (R$)",
-        "count": "Quantidade de produtos"
-    }
+    title="Distribuição dos preços dos produtos",
+    labels={"Preço": "Preço (R$)"},
+    template=tema
 )
 
-fig_histograma.update_layout(
-    xaxis_title="Preço (R$)",
+fig_hist.update_layout(
     yaxis_title="Quantidade de produtos"
 )
 
 
-# 2. Dispersão: preço e número de avaliações
-df_dispersao = df.dropna(subset=["Preço", "N_Avaliações"])
-df_dispersao = df_dispersao[
-    (df_dispersao["Preço"] > 0) &
-    (df_dispersao["N_Avaliações"] > 0)
-]
-
+# Gráfico 2: Dispersão entre preço e avaliações
 fig_dispersao = px.scatter(
-    df_dispersao,
-    x="Preço",
-    y="N_Avaliações",
-    title="Relação entre Preço e Número de Avaliações",
+    df_log,
+    x="N_Avaliações",
+    y="Preço",
+    title="Preço por número de avaliações",
     labels={
-        "Preço": "Preço (R$)",
-        "N_Avaliações": "Número de avaliações"
+        "N_Avaliações": "Número de avaliações",
+        "Preço": "Preço (R$)"
     },
-    opacity=0.65
+    template=tema,
+    hover_data=["Nota", "Gênero"]
 )
 
-# Usa escala logarítmica para facilitar a visualização dos valores
-fig_dispersao.update_yaxes(type="log")
+fig_dispersao.update_xaxes(type="log")
 
 
-# 3. Mapa de calor: correlação entre variáveis numéricas
-colunas_disponiveis = [
+# Gráfico 3: Mapa de correlação
+colunas_corr = [
     coluna for coluna in colunas_numericas
     if coluna in df.columns
 ]
 
-correlacoes = df[colunas_disponiveis].corr()
+correlacoes = df[colunas_corr].corr()
 
-fig_correlacao = px.imshow(
+fig_corr = px.imshow(
     correlacoes,
     text_auto=".2f",
+    aspect="auto",
     color_continuous_scale="RdBu_r",
     zmin=-1,
     zmax=1,
-    title="Correlação entre as Variáveis Numéricas"
+    title="Correlação entre variáveis numéricas",
+    template=tema
 )
 
 
-# 4. Gráfico de barras: quantidade por gênero
-if "Gênero" in df.columns:
-    contagem_genero = (
-        df["Gênero"]
-        .fillna("Não informado")
-        .value_counts()
-        .head(10)
-        .reset_index()
-    )
+# Gráfico 4: Quantidade de produtos por gênero
+dados_genero = (
+    df.dropna(subset=["Gênero"])
+    .groupby("Gênero")
+    .size()
+    .reset_index(name="Quantidade")
+    .sort_values("Quantidade", ascending=False)
+)
 
-    contagem_genero.columns = ["Gênero", "Quantidade"]
-
-    fig_barras = px.bar(
-        contagem_genero,
-        x="Quantidade",
-        y="Gênero",
-        orientation="h",
-        title="Os 10 Gêneros Mais Frequentes",
-        labels={
-            "Gênero": "Gênero",
-            "Quantidade": "Quantidade de produtos"
-        }
-    )
-
-    fig_barras.update_layout(yaxis={"categoryorder": "total ascending"})
+fig_genero = px.bar(
+    dados_genero,
+    x="Gênero",
+    y="Quantidade",
+    title="Quantidade de produtos por gênero",
+    labels={
+        "Gênero": "Gênero",
+        "Quantidade": "Quantidade de produtos"
+    },
+    template=tema
+)
 
 
-# 5. Gráfico de pizza: distribuição por material
-if "Material" in df.columns:
-    contagem_material = (
-        df["Material"]
-        .fillna("Não informado")
-        .value_counts()
-    )
+# Gráfico 5: Distribuição por material
+dados_material = (
+    df["Material"]
+    .fillna("Não informado")
+    .value_counts()
+    .reset_index()
+)
 
-    # Mantém os cinco materiais mais frequentes e agrupa os demais
-    materiais_pizza = contagem_material.head(5).copy()
+dados_material.columns = ["Material", "Quantidade"]
 
-    if len(contagem_material) > 5:
-        materiais_pizza["Outros"] = contagem_material.iloc[5:].sum()
+# Mostrar os 8 materiais mais frequentes e agrupar os demais
+if len(dados_material) > 8:
+    outros = dados_material.iloc[7:]["Quantidade"].sum()
 
-    fig_pizza = px.pie(
-        names=materiais_pizza.index,
-        values=materiais_pizza.values,
-        title="Distribuição dos Produtos por Material"
-    )
+    dados_material = dados_material.iloc[:7].copy()
+
+    dados_material.loc[len(dados_material)] = [
+        "Outros",
+        outros
+    ]
+
+fig_material = px.pie(
+    dados_material,
+    names="Material",
+    values="Quantidade",
+    title="Distribuição dos produtos por material",
+    template=tema,
+    hole=0.3
+)
 
 
-# 6. Gráfico de densidade aproximado usando histograma
+# Gráfico 6: Densidade dos preços
 fig_densidade = px.histogram(
-    df.dropna(subset=["Preço"]),
+    df_preco,
     x="Preço",
-    nbins=40,
     histnorm="probability density",
-    marginal="rug",
-    title="Distribuição da Densidade dos Preços",
-    labels={"Preço": "Preço (R$)"}
+    nbins=30,
+    title="Distribuição da densidade dos preços",
+    labels={"Preço": "Preço (R$)"},
+    template=tema
 )
 
 fig_densidade.update_layout(
-    xaxis_title="Preço (R$)",
-    yaxis_title="Densidade estimada"
+    yaxis_title="Densidade"
 )
 
 
-# 7. Regressão linear: preço e nota
-df_regressao = df.dropna(subset=["Preço", "Nota"])
-
-# Remove valores infinitos e preços negativos
-df_regressao = df_regressao[
-    (df_regressao["Preço"] >= 0) &
-    df_regressao["Preço"].map(lambda x: pd.notna(x) and abs(x) != float("inf")) &
-    df_regressao["Nota"].map(lambda x: pd.notna(x) and abs(x) != float("inf"))
-]
-
+# Gráfico 7: Regressão entre nota e preço
 fig_regressao = px.scatter(
-    df_regressao,
-    x="Preço",
-    y="Nota",
-    title="Relação entre Preço e Nota dos Produtos",
+    df_analise,
+    x="Nota",
+    y="Preço",
+    title="Relação entre nota e preço",
     labels={
-        "Preço": "Preço (R$)",
-        "Nota": "Nota do produto"
+        "Nota": "Nota do produto",
+        "Preço": "Preço (R$)"
     },
+    template=tema,
     opacity=0.6
 )
 
-# Calcula a linha de regressão e o R² quando há dados suficientes
-if len(df_regressao) >= 2 and df_regressao["Preço"].nunique() >= 2:
-    coeficientes = __import__("numpy").polyfit(
-        df_regressao["Preço"],
-        df_regressao["Nota"],
-        1
+# Calcular a linha de regressão, correlação e R²
+if len(df_analise) >= 2:
+    x = df_analise["Nota"].to_numpy()
+    y = df_analise["Preço"].to_numpy()
+
+    coeficientes = np.polyfit(x, y, 1)
+    previsoes = np.polyval(coeficientes, x)
+
+    ss_res = np.sum((y - previsoes) ** 2)
+    ss_tot = np.sum((y - np.mean(y)) ** 2)
+
+    r2 = (
+        1 - ss_res / ss_tot
+        if ss_tot != 0 else np.nan
     )
 
-    previsoes = (
-        coeficientes[0] * df_regressao["Preço"]
-        + coeficientes[1]
+    correlacao = df_analise["Nota"].corr(
+        df_analise["Preço"]
     )
 
-    # Calcula o coeficiente de determinação R²
-    soma_total = (
-        (df_regressao["Nota"] - df_regressao["Nota"].mean()) ** 2
-    ).sum()
-
-    if soma_total > 0:
-        r2 = 1 - (
-            (df_regressao["Nota"] - previsoes) ** 2
-        ).sum() / soma_total
-    else:
-        r2 = float("nan")
+    x_linha = np.linspace(x.min(), x.max(), 100)
+    y_linha = np.polyval(coeficientes, x_linha)
 
     fig_regressao.add_trace(
         go.Scatter(
-            x=df_regressao["Preço"],
-            y=previsoes,
+            x=x_linha,
+            y=y_linha,
             mode="lines",
-            name="Linha de regressão",
-            line={"color": "red"}
+            name="Regressão linear"
         )
     )
 
-    # Calcula a correlação entre preço e nota
-    correlacao = df_regressao["Preço"].corr(df_regressao["Nota"])
-
-    fig_regressao.update_layout(
-        title=(
-            "Preço x Nota | "
-            f"Correlação: {correlacao:.3f} | "
-            f"R²: {r2:.3f}"
-        )
+    texto_regressao = (
+        f"Correlação: {correlacao:.3f} | "
+        f"R²: {r2:.3f}"
+    )
+else:
+    texto_regressao = (
+        "Dados insuficientes para calcular a regressão."
     )
 
-
-# Monta a página com os gráficos e as conclusões
-app.layout = html.Div(
-    style={
-        "fontFamily": "Arial",
-        "maxWidth": "1200px",
-        "margin": "auto",
-        "padding": "20px",
-        "backgroundColor": "#f5f7fa"
-    },
-    children=[
-        html.H1(
-            "Dashboard de Análise de E-commerce",
-            style={"textAlign": "center"}
-        ),
-
-        html.P(
-            "Visualização interativa dos preços, avaliações e "
-            "características dos produtos.",
-            style={"textAlign": "center"}
-        ),
-
-        html.H2("1. Distribuição dos preços"),
-        dcc.Graph(figure=fig_histograma),
-        html.P(
-            "O histograma mostra como os preços estão distribuídos "
-            "e em quais faixas há maior concentração de produtos."
-        ),
-
-        html.H2("2. Preço e número de avaliações"),
-        dcc.Graph(figure=fig_dispersao),
-        html.P(
-            "A escala logarítmica ajuda a visualizar melhor os produtos "
-            "com poucas avaliações, sem esconder os valores mais altos."
-        ),
-
-        html.H2("3. Correlação entre variáveis"),
-        dcc.Graph(figure=fig_correlacao),
-        html.P(
-            "A matriz mostra a direção e a intensidade das relações "
-            "lineares entre as variáveis numéricas."
-        ),
-
-        html.H2("4. Produtos por gênero"),
-        dcc.Graph(figure=fig_barras) if "Gênero" in df.columns else
-        html.P("A coluna Gênero não foi encontrada no arquivo."),
-        html.P(
-            "O gráfico destaca os gêneros mais frequentes no conjunto "
-            "de dados."
-        ),
-
-        html.H2("5. Produtos por material"),
-        dcc.Graph(figure=fig_pizza) if "Material" in df.columns else
-        html.P("A coluna Material não foi encontrada no arquivo."),
-        html.P(
-            "A pizza compara a participação dos cinco materiais mais "
-            "frequentes com a categoria Outros."
-        ),
-
-        html.H2("6. Densidade dos preços"),
-        dcc.Graph(figure=fig_densidade),
-        html.P(
-            "A distribuição ajuda a identificar as faixas de preço "
-            "mais comuns e possíveis valores extremos."
-        ),
-
-        html.H2("7. Regressão entre preço e nota"),
-        dcc.Graph(figure=fig_regressao),
-        html.P(
-            "A linha de regressão e os valores de correlação e R² "
-            "ajudam a avaliar se existe uma relação linear entre preço "
-            "e nota. Correlação não significa causalidade."
-        ),
-
-        html.H2("Conclusão geral"),
-        html.P(
-            "O dashboard reúne diferentes perspectivas dos dados do "
-            "e-commerce. Os gráficos permitem investigar a distribuição "
-            "dos preços, a frequência de categorias, as avaliações e "
-            "as relações entre variáveis. As conclusões finais devem "
-            "considerar os resultados observados nos gráficos e as "
-            "limitações dos dados."
+fig_regressao.update_layout(
+    annotations=[
+        dict(
+            text=texto_regressao,
+            xref="paper",
+            yref="paper",
+            x=0.02,
+            y=0.98,
+            showarrow=False
         )
     ]
 )
 
 
-# Inicia o servidor local
+
+# CRIAR O DASHBOARD
+
+app = Dash(__name__)
+
+generos = sorted(
+    df["Gênero"].dropna().astype(str).unique()
+)
+
+opcoes_genero = [
+    {"label": "Todos os gêneros", "value": "Todos"}
+]
+
+opcoes_genero.extend(
+    [
+        {"label": genero, "value": genero}
+        for genero in generos
+    ]
+)
+
+app.layout = html.Div(
+    [
+        html.H1(
+            "Dashboard de E-commerce",
+            style={"textAlign": "center"}
+        ),
+
+        html.P(
+            "Análise exploratória dos preços, avaliações "
+            "e características dos produtos.",
+            style={"textAlign": "center"}
+        ),
+
+        html.H2("Filtro interativo"),
+
+        html.Label("Selecione o gênero do produto:"),
+
+        dcc.Dropdown(
+            id="filtro-genero",
+            options=opcoes_genero,
+            value="Todos",
+            clearable=False
+        ),
+
+        html.Div(
+            id="resumo-dados",
+            style={
+                "padding": "15px",
+                "fontWeight": "bold"
+            }
+        ),
+
+        dcc.Graph(id="grafico-interativo"),
+
+        html.H2("Distribuição dos preços"),
+        dcc.Graph(figure=fig_hist),
+        dcc.Graph(figure=fig_densidade),
+
+        html.H2("Avaliações e preços"),
+        dcc.Graph(figure=fig_dispersao),
+        dcc.Graph(figure=fig_regressao),
+
+        html.H2("Características dos produtos"),
+        dcc.Graph(figure=fig_genero),
+        dcc.Graph(figure=fig_material),
+
+        html.H2("Correlação entre variáveis"),
+        dcc.Graph(figure=fig_corr),
+
+        html.H2("Conclusão geral"),
+
+        html.P(
+            "O dashboard permite explorar a distribuição dos "
+            "preços, comparar avaliações e observar as "
+            "características dos produtos. A correlação e a "
+            "regressão ajudam a investigar relações entre "
+            "as variáveis, mas não demonstram causalidade."
+        )
+    ],
+    style={
+        "maxWidth": "1200px",
+        "margin": "auto",
+        "padding": "20px",
+        "fontFamily": "Arial, sans-serif"
+    }
+)
+
+
+# CALLBACK DO FILTRO INTERATIVO
+
+@app.callback(
+    Output("grafico-interativo", "figure"),
+    Output("resumo-dados", "children"),
+    Input("filtro-genero", "value")
+)
+def atualizar_grafico(genero_selecionado):
+
+    if genero_selecionado == "Todos":
+        dados = df_log.copy()
+    else:
+        dados = df_log[
+            df_log["Gênero"].astype(str)
+            == genero_selecionado
+        ].copy()
+
+    fig = px.scatter(
+        dados,
+        x="N_Avaliações",
+        y="Preço",
+        hover_data=["Nota", "Gênero", "Material"],
+        title=(
+            f"Preço por número de avaliações: "
+            f"{genero_selecionado}"
+        ),
+        labels={
+            "N_Avaliações": "Número de avaliações",
+            "Preço": "Preço (R$)",
+            "Nota": "Nota do produto",
+            "Gênero": "Gênero",
+            "Material": "Material"
+        },
+        template=tema
+    )
+
+    # A escala logarítmica facilita visualizar
+    # diferenças entre quantidades de avaliações.
+    fig.update_xaxes(type="log")
+
+    resumo = (
+        f"Gênero selecionado: {genero_selecionado} | "
+        f"Produtos exibidos: {len(dados)}"
+    )
+
+    return fig, resumo
+
+
+# EXECUTAR A APLICAÇÃO
+
 if __name__ == "__main__":
     app.run(debug=True)
